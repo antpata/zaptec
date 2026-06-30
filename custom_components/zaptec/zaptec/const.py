@@ -15,6 +15,8 @@ TOKEN_URL = "https://api.zaptec.com/oauth/token"  # noqa: S105
 API_URL = "https://api.zaptec.com/api/"
 CONST_URL = "https://api.zaptec.com/api/constants"
 
+SIGNALR_WS_URL = "wss://api.zaptec.com/signalr"
+
 API_RETRIES = 8  # Corresponds to median ~100 seconds of retries before giving up
 """Number of retries for API requests."""
 
@@ -38,6 +40,21 @@ API_RATELIMIT_PERIOD = 1
 
 API_RATELIMIT_MAX_REQUEST_RATE = 10
 """Maximum number of requests allowed per API rate limit period."""
+
+SIGNALR_PING_INTERVAL = 16
+"""Interval in seconds between SignalR ping messages."""
+
+SIGNALR_RECONNECT_INIT_DELAY = 1
+"""Initial delay in seconds before first reconnect attempt."""
+
+SIGNALR_RECONNECT_MAX_DELAY = 300
+"""Maximum delay in seconds between reconnect attempts (5 minutes)."""
+
+SIGNALR_RECONNECT_FACTOR = 2.0
+"""Exponential backoff factor for reconnect delay."""
+
+SIGNALR_RECORD_SEPARATOR = "\x1e"
+"""SignalR record separator character."""
 
 MAX_DEBUG_TEXT_LEN_ON_500 = 150
 """Maximum text length to add to debug log without truncating."""

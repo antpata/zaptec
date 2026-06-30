@@ -195,7 +195,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     # Setup the streams
-    manager.create_streams()
+    await manager.create_streams()
 
     # Make a set of the circuit ids from zaptec to check for deprecated Circuit-devices
     circuit_ids = {cid for c in manager.zaptec.chargers if (cid := c.get("CircuitId"))}

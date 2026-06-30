@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
-import contextlib
 from copy import copy
 from dataclasses import dataclass
 import logging
@@ -12,12 +10,13 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityDescription
-from homeassistant.util.ssl import get_default_context
 
 from .const import DOMAIN, KEYS_TO_SKIP_ENTITY_AVAILABILITY_CHECK, MANUFACTURER
 from .coordinator import ZaptecUpdateCoordinator
 from .entity import KeyUnavailableError, ZaptecBaseEntity
 from .zaptec import Charger, Installation, Zaptec, ZaptecBase
+from .zaptec.signalr import SignalRClient
+from .zaptec.zconst import ZCONST
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,8 +51,8 @@ class ZaptecManager:
     device_coordinators: dict[str, ZaptecUpdateCoordinator]
     """Coordinators for the devices, both installation and chargers."""
 
-    streams: list[tuple[asyncio.Task, Installation]]
-    """List of active streams for the installations."""
+    streams: list[SignalRClient]
+    """List of active SignalR streams for the chargers."""
 
     def __init__(
         self,
@@ -189,43 +188,66 @@ class ZaptecManager:
 
         return entities
 
-    def create_streams(self) -> None:
-        """Create the streams for all installations."""
-        for install in self.zaptec.installations:
-            if install.id in self.zaptec:
-                task = self.config_entry.async_create_background_task(
-                    self.hass,
-                    install.stream_main(
-                        cb=self.stream_callback,
-                        ssl_context=get_default_context(),
-                    ),
-                    name=f"Zaptec Stream for {install.qual_id}",
-                )
-                self.streams.append((task, install))
+    async def create_streams(self) -> None:
+        """Create the SignalR streams for all tracked chargers."""
+        for charger in self.zaptec.chargers:
+            if charger.id not in self.tracked_devices:
+                continue
+            if charger.id not in self.zaptec:
+                continue
+
+            device_id = charger.get("DeviceId")
+            if not device_id:
+                _LOGGER.warning("Charger %s has no DeviceId, skipping stream", charger.qual_id)
+                continue
+
+            def on_observation(
+                _device_id: str,
+                observation_id: int,
+                value: str,
+                _observed_at: object,
+                *,
+                _charger: Charger = charger,
+            ) -> None:
+                attr_name = ZCONST.observations.get(observation_id)
+                if attr_name and isinstance(attr_name, str):
+                    _charger.set_attributes({attr_name: value})
+
+            def on_end_of_frame(
+                *,
+                _charger: Charger = charger,
+            ) -> None:
+                coordinator = self.device_coordinators.get(_charger.id)
+                if coordinator is not None:
+                    coordinator.async_update_listeners()
+
+            client = SignalRClient(
+                session=self.zaptec._client,  # noqa: SLF001
+                device_id=device_id,
+                charger_id=charger.id,
+                access_token_factory=lambda: self.zaptec._access_token,  # noqa: SLF001
+                request_func=self.zaptec.request,
+                on_observation=on_observation,
+                on_end_of_frame=on_end_of_frame,
+            )
+
+            async def _run_client(_client: SignalRClient = client) -> None:
+                receive_task = await _client.start()
+                await receive_task
+
+            self.config_entry.async_create_background_task(
+                self.hass,
+                _run_client(),
+                name=f"Zaptec Stream for {charger.qual_id}",
+            )
+            self.streams.append(client)
 
     async def cancel_streams(self) -> None:
-        """Cancel all streams for the account."""
-        for task, install in self.streams:
-            _LOGGER.debug("Cancelling stream for %s", install.qual_id)
-            await install.stream_close()
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-
-    async def stream_callback(self, event: dict) -> None:
-        """Handle new update event from the zaptec stream.
-
-        The zaptec objects are updated in-place prior to this callback being called.
-        """
-        charger_id = event.get("ChargerId")
-        coordinator = self.device_coordinators.get(charger_id)
-        if coordinator is None:
-            _LOGGER.debug(
-                "Received stream update for unknown charger %s, ignoring",
-                charger_id,
-            )
-            return
-        coordinator.async_update_listeners()
+        """Cancel all SignalR streams for the account."""
+        for client in self.streams:
+            _LOGGER.debug("Cancelling SignalR stream")
+            await client.cancel()
+        self.streams.clear()
 
     @staticmethod
     async def first_time_setup(zaptec: Zaptec, configured_chargers: set[str] | None) -> set[str]:
