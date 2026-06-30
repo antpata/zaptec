@@ -222,10 +222,10 @@ class ZaptecManager:
                     coordinator.async_update_listeners()
 
             client = SignalRClient(
-                session=self.zaptec._client,  # noqa: SLF001
+                session=self.zaptec.client,
                 device_id=device_id,
                 charger_id=charger.id,
-                access_token_factory=lambda: self.zaptec._access_token,  # noqa: SLF001
+                access_token_factory=lambda: self.zaptec.access_token,
                 request_func=self.zaptec.request,
                 on_observation=on_observation,
                 on_end_of_frame=on_end_of_frame,

@@ -718,6 +718,16 @@ class Zaptec(Mapping[str, ZaptecBase]):
         """Return a list of all chargers."""
         return [v for v in self._map.values() if isinstance(v, Charger)]
 
+    @property
+    def client(self) -> aiohttp.ClientSession:
+        """Return the aiohttp client session used for API requests."""
+        return self._client
+
+    @property
+    def access_token(self) -> str | None:
+        """Return the current access token, or None if not authenticated."""
+        return self._access_token
+
     def qual_id(self, id: str) -> str:
         """Get the qualified id of an object.
 
