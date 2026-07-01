@@ -244,7 +244,19 @@ class TestEndOfFrameCallback:
         """on_end_of_frame should be called once after processing a frame."""
         calls = []
         client = make_client(on_end_of_frame=lambda: calls.append(1))
-        frame = json.dumps({"type": 6}) + RS
+        msg = {
+            "type": 1,
+            "target": "notifyObservation",
+            "arguments": [
+                "ZAP000001",
+                {
+                    "ObservationId": 513,
+                    "ObservedAt": "2026-04-06T10:00:00Z",
+                    "Value": "100.0",
+                },
+            ],
+        }
+        frame = json.dumps(msg) + RS
         client._process_frame(frame)
         assert len(calls) == 1
 
@@ -278,10 +290,22 @@ class TestEndOfFrameCallback:
     def test_callback_not_invoked_when_none(self):
         """on_end_of_frame should not be called when not provided."""
         client = make_client()  # no on_end_of_frame
-        frame = json.dumps({"type": 6}) + RS
+        msg = {
+            "type": 1,
+            "target": "notifyObservation",
+            "arguments": [
+                "ZAP000001",
+                {
+                    "ObservationId": 513,
+                    "ObservedAt": "2026-04-06T10:00:00Z",
+                    "Value": "100.0",
+                },
+            ],
+        }
+        frame = json.dumps(msg) + RS
         # Should not raise
         client._process_frame(frame)
-        assert len(client.state) == 0
+        assert len(client.state) == 1
 
     def test_callback_exception_does_not_propagate(self):
         """An exception in on_end_of_frame should not propagate."""
@@ -289,9 +313,30 @@ class TestEndOfFrameCallback:
             raise RuntimeError("boom")
 
         client = make_client(on_end_of_frame=boom)
-        frame = json.dumps({"type": 6}) + RS
+        msg = {
+            "type": 1,
+            "target": "notifyObservation",
+            "arguments": [
+                "ZAP000001",
+                {
+                    "ObservationId": 513,
+                    "ObservedAt": "2026-04-06T10:00:00Z",
+                    "Value": "100.0",
+                },
+            ],
+        }
+        frame = json.dumps(msg) + RS
         # Should not raise
         client._process_frame(frame)
+        assert len(client.state) == 1
+
+    def test_callback_not_invoked_for_ping_only_frame(self):
+        """on_end_of_frame should not fire for a ping-only frame."""
+        calls = []
+        client = make_client(on_end_of_frame=lambda: calls.append(1))
+        frame = json.dumps({"type": 6}) + RS
+        client._process_frame(frame)
+        assert len(calls) == 0
         assert len(client.state) == 0
 
     def test_callback_invoked_after_observations(self):

@@ -331,6 +331,7 @@ class SignalRClient:
     def _process_frame(self, data: str) -> None:
         """Process a WebSocket text frame which may contain multiple SignalR messages."""
         parts = data.split(SIGNALR_RECORD_SEPARATOR)
+        observations = 0
         for part in parts:
             if not part:
                 continue
@@ -342,6 +343,7 @@ class SignalRClient:
 
             msg_type = message.get("type")
             if msg_type == 1:
+                observations += 1
                 self._handle_invocation(message)
             elif msg_type == 6:
                 pass  # Ping response, nothing to do
@@ -357,7 +359,7 @@ class SignalRClient:
                     self._device_id,
                 )
 
-        if self._on_end_of_frame:
+        if self._on_end_of_frame and observations > 0:
             try:
                 self._on_end_of_frame()
             except Exception:
