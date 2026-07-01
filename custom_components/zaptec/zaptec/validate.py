@@ -86,21 +86,6 @@ class ChargerFirmware(BaseModel):
     AvailableVersion: str
     IsUpToDate: bool
 
-
-class InstallationConnectionDetails(BaseModel):
-    """Pydantic model for the servicebus connection details of a Zaptec installation."""
-
-    model_config = ConfigDict(extra="allow")
-    Host: str
-    Password: str
-    Port: int
-    UseSSL: bool
-    Subscription: str
-    Type: int
-    Username: str
-    Topic: str
-
-
 CHARGER_FIRMWARES = TypeAdapter(list[ChargerFirmware])
 CHARGER_STATES = TypeAdapter(list[ChargerState])
 CONSTANTS = TypeAdapter(dict[str, Any])
@@ -116,7 +101,6 @@ URLS = {
     r"installation/[0-9a-f\-]+": Installation,
     r"installation/[0-9a-f\-]+/hierarchy": Hierarchy,
     r"installation/[0-9a-f\-]+/update": None,
-    r"installation/[0-9a-f\-]+/messagingConnectionDetails": InstallationConnectionDetails,
     r"chargers/[0-9a-f\-]+": Charger,
     r"chargers/[0-9a-f\-]+/state": CHARGER_STATES,
     r"chargers/[0-9a-f\-]+/authorizecharge": None,

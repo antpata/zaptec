@@ -337,176 +337,6 @@ class Installation(ZaptecBase):
                 raise
             _LOGGER.debug("Access denied to installation %s firmware info", self.qual_id)
 
-    #   STREAM METHODS
-    # =======================================================================
-
-    async def live_stream_connection_details(self):
-        """Get the live stream connection details for the installation."""
-        # NOTE: API call deprecated
-        data = await self.zaptec.request(f"installation/{self.id}/messagingConnectionDetails")
-        self.connection_details = data
-        return data
-
-    async def stream(self, cb=None, ssl_context=None) -> asyncio.Task | None:
-        """Kickoff the steam in the background."""
-        await self.cancel_stream()
-        self._stream_task = asyncio.create_task(self.stream_main(cb=cb, ssl_context=ssl_context))
-        return self._stream_task
-
-    def _stream_log(self, data: dict[str, Any]) -> None:
-        """Log a stream message."""
-        if not DEBUG_API_CALLS:
-            return
-        if isinstance(data, dict):
-            if "StateId" in data:
-                data["StateId"] = (
-                    f"{data['StateId']} ({ZCONST.observations.get(data['StateId'])})"
-                )
-            # Silenty delete these from logging. They are never used
-            data.pop("DeviceId", None)
-            data.pop("DeviceType", None)
-        _LOGGER.debug("@@@  EVENT %s", self.zaptec.redact(data))
-
-    async def stream_main(self, cb=None, ssl_context=None) -> None:
-        """Main stream handler."""
-        try:
-            # Already running?
-            if self._stream_running:
-                raise RuntimeError(
-                    "Stream already running. Call cancel_stream() before starting a new stream."
-                )
-            self._stream_running = True
-
-            # Get connection details
-            try:
-                conf = await self.live_stream_connection_details()
-            except RequestError as err:
-                if err.error_code != HTTPStatus.FORBIDDEN:
-                    raise
-                _LOGGER.warning(
-                    "Failed to get live stream info. Check if user have access in the zaptec portal"
-                )
-                return
-
-            # Open the connection
-            constr = (
-                f"Endpoint=sb://{conf['Host']}/;"
-                f"SharedAccessKeyName={conf['Username']};"
-                f"SharedAccessKey={conf['Password']}"
-            )
-            kw = {}
-            if ssl_context:
-                kw["ssl_context"] = ssl_context
-            servicebus_client = ServiceBusClient.from_connection_string(conn_str=constr, **kw)
-            obfuscated = constr.replace(conf["Password"], "********").replace(
-                conf["Username"], "********"
-            )
-            _LOGGER.debug("Connecting to servicebus using %s", obfuscated)
-
-            self._stream_receiver = None
-            async with servicebus_client:
-                receiver = await asyncio.to_thread(
-                    servicebus_client.get_subscription_receiver,
-                    topic_name=conf["Topic"],
-                    subscription_name=conf["Subscription"],
-                )
-                _LOGGER.info("Running service bus stream for %s", self.qual_id)
-                # Store the receiver in order to close it and cancel this stream
-                self._stream_receiver = receiver
-                async with receiver:
-                    async for msg in receiver:
-                        # For the exception in case it fails before setting the value
-                        binmsg = "<unknown>"
-                        try:
-                            # After some blind research it seems the messages
-                            # are encoded with .NET binary xml format (MC-NBFX)
-                            # https://learn.microsoft.com/en-us/openspecs/windows_protocols/mc-nbfx
-                            # Surprisingly there doesn't seem to be any py libries
-                            # for that, so a small scaled down version is added
-                            # here.
-                            binmsg = b"".join(msg.body)
-                            # _LOGGER.debug("Received message %s", binmsg)
-
-                            # Decode MC-NBFX message
-                            obj = mc_nbfx_decoder(binmsg)
-                            #  _LOGGER.debug("Unecoded message: %s", obj)
-
-                            # Convert the json payload
-                            json_result = json.loads(obj[0]["text"])
-
-                            # Log the message
-                            self._stream_log(json_result.copy())
-
-                            # Send result to the stream update method.
-                            self.stream_update(json_result.copy())
-
-                            # Execute the callback.
-                            if cb:
-                                await cb(json_result)
-
-                        except Exception as err:
-                            _LOGGER.exception("Couldn't process stream message: %s", err)
-                            _LOGGER.debug("Message: %s", binmsg)
-                            # Pass the message as the stream must continue.
-
-                        # remove the msg from the "queue"
-                        await receiver.complete_message(msg)
-
-        except Exception as err:
-            # Do this in order to show the error in the log.
-            _LOGGER.exception("Stream failed: %s", err)
-
-        finally:
-            # Cleanup
-            self._stream_receiver = None
-            self._stream_running = False
-            _LOGGER.info("Servicebus stream stopped for %s", self.qual_id)
-
-    async def stream_close(self) -> None:
-        """Close the stream receiver."""
-        try:
-            if self._stream_receiver is not None:
-                await self._stream_receiver.close()
-        except ServiceBusError:
-            # This happens if the receiver is in the process of setting up
-            # or closing when are trying to close it.
-            pass
-
-    async def cancel_stream(self) -> None:
-        """Cancel the running stream task."""
-        if self._stream_task is not None:
-            await self.stream_close()
-            self._stream_task.cancel()
-            try:
-                await self._stream_task
-            except asyncio.CancelledError:
-                pass
-            finally:
-                self._stream_task = None
-
-    def stream_update(self, data: TDict) -> None:
-        """Stream event callback."""
-
-        charger_id = data.pop("ChargerId", None)
-        if charger_id is None:
-            _LOGGER.warning("Unknown update message %s", data)
-            return
-
-        if charger_id == "00000000-0000-0000-0000-000000000000":
-            _LOGGER.debug("Ignoring charger with id %s", charger_id)
-            return
-
-        try:
-            # Assumes that the stream only contain chargers that belong to
-            # this installation.
-            charger = next(chg for chg in self.chargers if chg.id == charger_id)
-        except StopIteration:
-            _LOGGER.warning("Got update for unknown charger, id %s", charger_id)
-            return
-
-        d = ZaptecBase.state_to_attrs([data], "StateId", ZCONST.observations)
-        charger.set_attributes(d)
-
     #   API METHODS
     # =======================================================================
 
@@ -881,6 +711,16 @@ class Zaptec(Mapping[str, ZaptecBase]):
     def chargers(self) -> Iterable[Charger]:
         """Return a list of all chargers."""
         return [v for v in self._map.values() if isinstance(v, Charger)]
+
+    @property
+    def client(self) -> aiohttp.ClientSession:
+        """Return the underlying aiohttp client session."""
+        return self._client
+
+    @property
+    def access_token(self) -> str | None:
+        """Return the current access token."""
+        return self._access_token
 
     def qual_id(self, id: str) -> str:
         """Get the qualified id of an object.
